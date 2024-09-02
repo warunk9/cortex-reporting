@@ -1,0 +1,24 @@
+{
+    "CurrencyConversion": [
+        {
+            "parent_table": "currency_conversion",
+            "schedule_frequency": "@daily"
+        }
+    ],
+    "AccountingDocuments": [
+        {
+            "parent_table": "currency_decimal",
+            "schedule_frequency": "@daily"
+        },
+        {
+            "parent_table": "calendar_date_dim",
+            "schedule_frequency": "@hourly"
+        }
+    ],
+    "AccountingDocumentsRecievable": [
+        {
+            "parent_table": "AccountingDocuments",
+            "schedule_frequency": "*/15 * * * *"
+        }
+    ]
+}
