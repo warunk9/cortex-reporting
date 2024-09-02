@@ -214,7 +214,8 @@ def _generate_dag_files(module_name: str, target_dataset_type: str,
         "load_frequency": load_frequency,
         "year": today.year,
         "month": today.month,
-        "day": today.day
+        "day": today.day,
+        "table_name": table_name
     }
 
     generate_file_from_template(python_dag_template_file, output_py_file,
