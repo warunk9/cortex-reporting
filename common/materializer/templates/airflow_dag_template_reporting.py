@@ -19,11 +19,81 @@
 
 from __future__ import print_function
 from airflow.operators.dummy_operator import DummyOperator
-
 from datetime import timedelta, datetime
 import airflow
 from airflow.contrib.operators.bigquery_operator import BigQueryOperator
 from airflow.version import version as AIRFLOW_VERSION
+from airflow.sensors.external_task_sensor import ExternalTaskSensor
+import json 
+
+#read json data
+def read_json_file(filename):
+    try:
+        with open(filename, 'r') as file:
+            data = json.load(file)
+        return data
+    except FileNotFoundError:
+        print(f"Error: The file '{filename}' was not found.")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON format in '{filename}': {e}")
+        return None
+
+# Example usage
+filename = 'dag-set.json'
+data = read_json_file(filename)
+
+#{table_name} to be used, currently using variable for local testing
+# table_name = "CurrencyConversion"
+
+#generate dag full name 
+def create_dag_full_name(table_name):
+    # target_dataset = "naitik-poc-test.REPORTING_SAP_V_5_3"
+    # module_name = "SAP"
+    # target_dataset_type = "REPORTING"
+
+    dag_name = "_".join(
+        [${target_dataset}.replace(".", "_"), "refresh", ${table_name}])
+    dag_full_name = "_".join(
+        [${module_name}.lower(), ${target_dataset_type}, dag_name])
+    return dag_full_name
+
+#create dependency list 
+if ${table_name} in data:
+    list_dep = data[{table_name}]
+    task_id_def = "parent_task_"
+    c = 0
+    for i in list_dep:
+        c += 1
+        task_id_def = task_id_def + str(c)
+        dag_full_name = create_dag_full_name(${table_name})
+        i.update(dag_id = dag_full_name)
+        i.update(task_id = task_id_def)
+print(list_dep)
+
+def execution_delta_dependency(logical_date, **kwargs):
+    dt = logical_date
+    task_instance_id=str(kwargs['task_instance']).split(':')[1].split(' ')[1].split('.')[1]
+    res = None
+
+    for sub in list_dep:
+        if sub['task_id'] == task_instance_id:
+            res = sub
+            break
+
+    schedule_frequency=res['schedule_frequency']
+    parent_dag_poke = ''
+    if schedule_frequency == "monthly":
+        parent_dag_poke = dt.replace(day=1).replace(hour=0, minute=0, second=0, microsecond=0)
+    elif schedule_frequency == "weekly":
+        parent_dag_poke = (dt - timedelta(days=dt.isoweekday() % 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    elif schedule_frequency == "yearly":
+        parent_dag_poke = dt.replace(day=1, month=1, hour=0, minute=0, second=0, microsecond=0)
+    elif schedule_frequency == "daily":
+        parent_dag_poke = (dt).replace(hour=0, minute=0, second=0, microsecond=0)    
+    print(parent_dag_poke)
+    return parent_dag_poke
+
 
 
 default_dag_args = {
@@ -40,6 +110,20 @@ with airflow.DAG("${dag_full_name}",
                  max_active_runs=1,
                  schedule_interval="${load_frequency}") as dag:
     start_task = DummyOperator(task_id="start")
+    
+    external_task_sensors = []
+    for parent_task in list_dep:
+        external_task_sensor = ExternalTaskSensor(
+            task_id=parent_task["task_id"],
+            external_dag_id=parent_task["dag_id"],
+            timeout=900,
+            execution_date_fn=execution_delta_dependency,
+            poke_interval=60,  # Check every 60 seconds
+            mode="reschedule",  # Reschedule task if external task fails
+            check_existence=True
+        )
+        external_task_sensors.append(external_task_sensor)
+    
     if AIRFLOW_VERSION.startswith("1."):
         refresh_table = BigQueryOperator(
             task_id="refresh_table",
@@ -52,5 +136,8 @@ with airflow.DAG("${dag_full_name}",
             sql="${query_file}",
             gcp_conn_id="${lower_module_name}_${lower_tgt_dataset_type}_bq",
             use_legacy_sql=False)
+    
     stop_task = DummyOperator(task_id="stop")
-    start_task >> refresh_table >> stop_task
+    
+    
+    start_task >> external_task_sensors >> refresh_table >> stop_task
