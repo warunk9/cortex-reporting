@@ -23,8 +23,10 @@ from datetime import timedelta, datetime
 import airflow
 from airflow.contrib.operators.bigquery_operator import BigQueryOperator
 from airflow.version import version as AIRFLOW_VERSION
+#begin of addition by Naitik on Sep 6 2024 for dag dependency utility changes
 from airflow.sensors.external_task_sensor import ExternalTaskSensor
 import json 
+from croniter import croniter
 
 #read json data
 def read_json_file(filename):
@@ -39,8 +41,8 @@ def read_json_file(filename):
         print(f"Error: Invalid JSON format in '{filename}': {e}")
         return None
 
-# Example usage
-filename = 'dag-set.json'
+# Read file having the dependencies maintained in the data variable
+filename = '/home/airflow/gcs/data/dag-set.json'
 data = read_json_file(filename)
 
 #{table_name} to be used, currently using variable for local testing
@@ -52,24 +54,29 @@ def create_dag_full_name(table_name):
     # module_name = "SAP"
     # target_dataset_type = "REPORTING"
 
-    dag_name = "_".join(
-        [${target_dataset}.replace(".", "_"), "refresh", ${table_name}])
-    dag_full_name = "_".join(
-        [${module_name}.lower(), ${target_dataset_type}, dag_name])
-    return dag_full_name
+    #please note: financial_statement_version is populating fsv_flattened table and fsv_glaccount tables both. profit_center dag is used to populate the table profitcenter_flattened
+    dag_name_exceptions = ["currency_conversion","currency_decimal","calendar_date_dim","Stock_Weekly_Snapshots_periodical_Update","Stock_Weekly_Snapshots_Initial",
+    "Stock_Monthly_Snapshots_Periodical_Update","Stock_Monthly_Snapshots_Initial", "financial_statement_version", "financial_statement_periodical_load","profit_center"]
+    if table_name in dag_name_exceptions:
+        return table_name
+    else:
+        dag_name = "_".join(
+            ["${target_dataset}".replace(".", "_"), "refresh", table_name])
+        dag_full_name = "_".join(
+            ["${module_name}".lower(), "${target_dataset_type}", dag_name])
+        return dag_full_name
 
 #create dependency list 
-if ${table_name} in data:
-    list_dep = data[{table_name}]
-    task_id_def = "parent_task_"
+if "${table_name}" in data:
+    list_dep = data["${table_name}"]
     c = 0
     for i in list_dep:
+        task_id_def = "parent_task_"
         c += 1
         task_id_def = task_id_def + str(c)
-        dag_full_name = create_dag_full_name(${table_name})
+        dag_full_name = create_dag_full_name(i['parent_table'])
         i.update(dag_id = dag_full_name)
         i.update(task_id = task_id_def)
-print(list_dep)
 
 def execution_delta_dependency(logical_date, **kwargs):
     dt = logical_date
@@ -80,19 +87,31 @@ def execution_delta_dependency(logical_date, **kwargs):
         if sub['task_id'] == task_instance_id:
             res = sub
             break
+    
 
     schedule_frequency=res['schedule_frequency']
     parent_dag_poke = ''
-    if schedule_frequency == "monthly":
-        parent_dag_poke = dt.replace(day=1).replace(hour=0, minute=0, second=0, microsecond=0)
-    elif schedule_frequency == "weekly":
-        parent_dag_poke = (dt - timedelta(days=dt.isoweekday() % 7)).replace(hour=0, minute=0, second=0, microsecond=0)
-    elif schedule_frequency == "yearly":
-        parent_dag_poke = dt.replace(day=1, month=1, hour=0, minute=0, second=0, microsecond=0)
-    elif schedule_frequency == "daily":
-        parent_dag_poke = (dt).replace(hour=0, minute=0, second=0, microsecond=0)    
-    print(parent_dag_poke)
+    exec_dt = kwargs['context']['execution_date']
+    base = datetime(exec_dt.year, exec_dt.month, exec_dt.day, exec_dt.hour, exec_dt.minute)
+    iter = croniter(schedule_frequency, base)
+    exec_base = exec_dt.replace(second=0, microsecond=0)
+    prev_instance = iter.get_prev(datetime)
+    current_instance = iter.get_current(datetime)   
+    if(exec_base != prev_instance):
+        parent_dag_poke = prev_instance
+    else:
+        parent_dag_poke = next_instance
+    # if schedule_frequency == "@monthly":
+    #     parent_dag_poke = dt.replace(day=1).replace(hour=0, minute=0, second=0, microsecond=0)
+    # elif schedule_frequency == "@weekly":
+    #     parent_dag_poke = (dt - timedelta(days=dt.isoweekday() % 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # elif schedule_frequency == "@yearly":
+    #     parent_dag_poke = dt.replace(day=1, month=1, hour=0, minute=0, second=0, microsecond=0)
+    # elif schedule_frequency == "@daily":
+    #     parent_dag_poke = (dt).replace(hour=0, minute=0, second=0, microsecond=0)    
+    # print(parent_dag_poke)
     return parent_dag_poke
+#end of addition by Naitik on Sep 6 2024 for dag dependency utility changes
 
 
 
@@ -110,7 +129,8 @@ with airflow.DAG("${dag_full_name}",
                  max_active_runs=1,
                  schedule_interval="${load_frequency}") as dag:
     start_task = DummyOperator(task_id="start")
-    
+#begin of addition by Naitik on Sep 6 2024 for dag dependency utility changes
+# add external task sensor for the dependent tasks    
     external_task_sensors = []
     for parent_task in list_dep:
         external_task_sensor = ExternalTaskSensor(
@@ -123,6 +143,7 @@ with airflow.DAG("${dag_full_name}",
             check_existence=True
         )
         external_task_sensors.append(external_task_sensor)
+#end of addition by Naitik on Sep 6 2024 for dag dependency utility changes
     
     if AIRFLOW_VERSION.startswith("1."):
         refresh_table = BigQueryOperator(
@@ -138,6 +159,7 @@ with airflow.DAG("${dag_full_name}",
             use_legacy_sql=False)
     
     stop_task = DummyOperator(task_id="stop")
-    
-    
+
+#changed by Naitik on Sep 6 2024 for dag dependency utility changes
+# add external task sensors as the dependent tasks
     start_task >> external_task_sensors >> refresh_table >> stop_task
