@@ -135,34 +135,6 @@ def _parse_args() -> tuple[str, str, str, str, dict, bool]:
     return (module_name, jinja_data_file, target_dataset_type, target_dataset,
             bq_object_setting, load_test_data)
 
-# #function added by naitik 
-# #read json data
-# def read_json_file(filename):
-#     try:
-#         with open(filename, 'r') as file:
-#             data = json.load(file)
-#         return data
-#     except FileNotFoundError:
-#         print(f"Error: The file '{filename}' was not found.")
-#         return None
-#     except json.JSONDecodeError as e:
-#         print(f"Error: Invalid JSON format in '{filename}': {e}")
-#         return None
-
-# #generate dag full name 
-# def create_dag_full_name(table_name, target_dataset, module_name, target_dataset_type):
-#     # target_dataset = "naitik-poc-test.REPORTING_SAP_V_5_3"
-#     # module_name = "SAP"
-#     # target_dataset_type = "REPORTING"
-#     dag_name_exceptions = ["currency_conversion"]
-#     if table_name in dag_name_exceptions:
-#         return table_name
-#     else:
-#         dag_name = "_".join(
-#             [target_dataset.replace(".", "_"), "refresh", table_name])
-#         dag_full_name = "_".join(
-#             [module_name.lower(), target_dataset_type, dag_name])
-#         return dag_full_name
 
 def _generate_dag_files(module_name: str, target_dataset_type: str,
                         target_dataset: str, table_name: str,
@@ -232,29 +204,6 @@ def _generate_dag_files(module_name: str, target_dataset_type: str,
 
     today = datetime.datetime.now()
     load_frequency = table_setting["load_frequency"]
-
-    # # Read file having the dependencies maintained in the data variable
-    # filename = 'cortex-data-foundation/src/SAP/SAP_REPORTING/common/materializer/templates/dag-set.json'
-    # data = read_json_file(filename)
-    
-    # if table_name in data:
-    #     list_dep = data[table_name]
-    #     task_id_def = "parent_task_"
-    #     c = 0
-    #     for i in list_dep:
-    #         c += 1
-    #         task_id_def = task_id_def + str(c)
-    #         dag_full_name = create_dag_full_name(table_name, target_dataset, module_name, target_dataset_type)
-    #         i.update(dag_id = dag_full_name)
-    #         i.update(task_id = task_id_def)
-
-    # out_dep_list = json.dumps(list_dep, indent=4)
-    # filename = "dependencies_list.json"
-
-    # # Save the JSON data to the file
-    # with open(filename, "w") as json_file:
-    #     json_file.write(out_dep_list)
-    
     # TODO: Figure out a way to do lowercase in string template substitution
     # directly.
     py_subs = {
@@ -266,12 +215,12 @@ def _generate_dag_files(module_name: str, target_dataset_type: str,
         "year": today.year,
         "month": today.month,
         "day": today.day,
-        #begin of addition by Naitik on Sep 6 for Dag dep utility changes
+        #CUSTOM CHANGES for handling dag dependencies 
         "table_name": table_name, 
         "target_dataset": target_dataset,
         "module_name": module_name,
         "target_dataset_type": target_dataset_type
-        # #end of addition by Naitik on Sep 6 for Dag dep utility changes
+        # CUSTOM CHANGES end of addition by Google Team for handling dag dependencies
     }
 
     generate_file_from_template(python_dag_template_file, output_py_file,
